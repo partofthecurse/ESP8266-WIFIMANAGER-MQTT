@@ -1,11 +1,16 @@
- #include <FS.h>                   //this needs to be first, or it all crashes and burns...
+//#include <FS.h>                   //this needs to be first, or it all crashes and burns...
+//#include "SPIFFS.h"
+#include <LittleFS.h>  //for ESP82
+#define SPIFFS LittleFS
+//#include <LITTLEFS.h> //for ESP32
+//#define SPIFFS LITTLEFS
 
-#include <ESP8266WiFi.h>          //https://github.com/esp8266/Arduino
+#include <ESP8266WiFi.h>  //https://github.com/esp8266/Arduino
 //needed for library
 #include <DNSServer.h>
 #include <ESP8266WebServer.h>
-#include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager
-#include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
+#include <WiFiManager.h>  //https://github.com/tzapu/WiFiManager
+#include <ArduinoJson.h>  //https://github.com/bblanchon/ArduinoJson
 #include <PubSubClient.h>
 
 //flag for saving data
@@ -13,17 +18,17 @@ bool shouldSaveConfig = false;
 
 //define your default values here, if there are different values in config.json, they are overwritten.
 //char mqtt_server[40];
-#define mqtt_server       "xxx.cloudmqtt.com"
-#define mqtt_port         "12345"
-#define mqtt_user         "mqtt_user"
-#define mqtt_pass         "mqtt_pass"
-#define humidity_topic    "sensor/humidity"
+#define mqtt_server "xxx.cloudmqtt.com"
+#define mqtt_port "12345"
+#define mqtt_user "mqtt_user"
+#define mqtt_pass "mqtt_pass"
+#define humidity_topic "sensor/humidity"
 
 WiFiClient espClient;
 PubSubClient client(espClient);
 
 //callback notifying us of the need to save config
-void saveConfigCallback () {
+void saveConfigCallback() {
   Serial.println("Should save config");
   shouldSaveConfig = true;
 }
@@ -34,8 +39,8 @@ void setup() {
   Serial.begin(115200);
   Serial.println();
 
-  //clean FS for testing 
-//  SPIFFS.format();
+  //clean FS for testing
+  //  SPIFFS.format();
 
   //read configuration from FS json
   Serial.println("mounting FS...");
@@ -53,15 +58,15 @@ void setup() {
         std::unique_ptr<char[]> buf(new char[size]);
 
         configFile.readBytes(buf.get(), size);
-        DynamicJsonBuffer jsonBuffer;
-        JsonObject& json = jsonBuffer.parseObject(buf.get());
-        json.printTo(Serial);
-        if (json.success()) {
+        DynamicJsonDocument doc(1024);
+        deserializeJson(doc, buf.get());
+        auto error = serializeJson(doc, Serial);
+        if (!error) {
           Serial.println("\nparsed json");
-          strcpy(mqtt_server, json["mqtt_server"]);
-          strcpy(mqtt_port, json["mqtt_port"]);
-          strcpy(mqtt_user, json["mqtt_user"]);
-          strcpy(mqtt_pass, json["mqtt_pass"]);
+          strcpy(mqtt_server, doc["mqtt_server"]);
+          strcpy(mqtt_port, doc["mqtt_port"]);
+          strcpy(mqtt_user, doc["mqtt_user"]);
+          strcpy(mqtt_pass, doc["mqtt_pass"]);
 
         } else {
           Serial.println("failed to load json config");
@@ -87,15 +92,15 @@ void setup() {
   //Local intialization. Once its business is done, there is no need to keep it around
   WiFiManager wifiManager;
 
-// Reset Wifi settings for testing  
-//  wifiManager.resetSettings();
+  // Reset Wifi settings for testing
+  //  wifiManager.resetSettings();
 
   //set config save notify callback
   wifiManager.setSaveConfigCallback(saveConfigCallback);
 
   //set static ip
-//  wifiManager.setSTAStaticIPConfig(IPAddress(10,0,1,99), IPAddress(10,0,1,1), IPAddress(255,255,255,0));
-  
+  //  wifiManager.setSTAStaticIPConfig(IPAddress(10,0,1,99), IPAddress(10,0,1,1), IPAddress(255,255,255,0));
+
   //add all your parameters here
   wifiManager.addParameter(&custom_mqtt_server);
   wifiManager.addParameter(&custom_mqtt_port);
@@ -108,7 +113,7 @@ void setup() {
   //set minimum quality of signal so it ignores AP's under that quality
   //defaults to 8%
   //wifiManager.setMinimumSignalQuality();
-  
+
   //sets timeout until configuration portal gets turned off
   //useful to make it all retry or go to sleep
   //in seconds
@@ -134,13 +139,13 @@ void setup() {
   strcpy(mqtt_port, custom_mqtt_port.getValue());
   strcpy(mqtt_user, custom_mqtt_user.getValue());
   strcpy(mqtt_pass, custom_mqtt_pass.getValue());
- // strcpy(blynk_token, custom_blynk_token.getValue());
+  // strcpy(blynk_token, custom_blynk_token.getValue());
 
   //save the custom parameters to FS
   if (shouldSaveConfig) {
     Serial.println("saving config");
-    DynamicJsonBuffer jsonBuffer;
-    JsonObject& json = jsonBuffer.createObject();
+    DynamicJsonDocument json(1024);
+
     json["mqtt_server"] = mqtt_server;
     json["mqtt_port"] = mqtt_port;
     json["mqtt_user"] = mqtt_user;
@@ -151,16 +156,16 @@ void setup() {
       Serial.println("failed to open config file for writing");
     }
 
-    json.printTo(Serial);
-    json.printTo(configFile);
+    serializeJson(json, Serial);
+    serializeJson(json, configFile);
     configFile.close();
     //end save
   }
 
   Serial.println("local ip");
   Serial.println(WiFi.localIP());
-//  client.setServer(mqtt_server, 12025);
-  const uint16_t mqtt_port_x = 12025; 
+  //  client.setServer(mqtt_server, 12025);
+  const uint16_t mqtt_port_x = 12025;
   client.setServer(mqtt_server, mqtt_port_x);
 }
 
@@ -184,38 +189,11 @@ void reconnect() {
   }
 }
 
-
-bool checkBound(float newValue, float prevValue, float maxDiff) {
-  return !isnan(newValue) &&
-         (newValue < prevValue - maxDiff || newValue > prevValue + maxDiff);
-}
-
-long lastMsg = 0;
-float temp = 0.0;
-float hum = 0.0;
-float diff = 1.0;
-
 void loop() {
   // put your main code here, to run repeatedly:
   if (!client.connected()) {
     reconnect();
   }
   client.loop();
-
-
-  long now = millis();
-  if (now - lastMsg > 1000) {
-    lastMsg = now;
-
-    float newTemp = 10;
-    float newHum = 20;
-
-
-    if (checkBound(newHum, hum, diff)) {
-      hum = newHum;
-      Serial.print("New humidity:");
-      Serial.println(String(hum).c_str());
-      client.publish(humidity_topic, String(hum).c_str(), true);
-    }
-  }
+  yield();
 }
